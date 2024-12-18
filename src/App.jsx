@@ -1,6 +1,8 @@
 import About from './components/About';
 import Hero from './components/Hero';
 import NavBar from './components/Navbar';
+import Contact from "./components/Contact.jsx";
+import Footer from "./components/Footer.jsx";
 
 function App() {
 
@@ -9,6 +11,8 @@ function App() {
       <NavBar />
       <Hero />
       <About />
+        <Contact />
+        <Footer />
     </main>
   )
 }
