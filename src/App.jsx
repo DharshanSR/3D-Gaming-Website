@@ -1,4 +1,5 @@
 import About from './components/About';
+import Features from './components/Features';
 import Hero from './components/Hero';
 import NavBar from './components/Navbar';
 import Story from "./components/Story.jsx";
@@ -10,7 +11,8 @@ function App() {
             <NavBar/>
             <Hero/>
             <About/>
-            <Story/>
+      <Feature />
+      <Story />
         </main>
     )
 }
