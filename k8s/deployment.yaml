@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gaming-website-deployment
+  namespace: gaming-website
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: gaming-website
+  template:
+    metadata:
+      labels:
+        app: gaming-website
+    spec:
+      containers:
+      - name: gaming-website
+        image: ghcr.io/dharshans/3d-gaming-website:latest
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
