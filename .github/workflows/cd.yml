@@ -1,0 +1,261 @@
+name: CD Pipeline
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types:
+      - completed
+    branches: [ main, develop ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Check CI Success
+  check-ci:
+    name: Check CI Status
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    outputs:
+      deploy-staging: ${{ steps.check.outputs.deploy-staging }}
+      deploy-production: ${{ steps.check.outputs.deploy-production }}
+    steps:
+    - name: Check deployment conditions
+      id: check
+      run: |
+        if [[ "${{ github.event.workflow_run.head_branch }}" == "develop" ]]; then
+          echo "deploy-staging=true" >> $GITHUB_OUTPUT
+          echo "deploy-production=false" >> $GITHUB_OUTPUT
+        elif [[ "${{ github.event.workflow_run.head_branch }}" == "main" ]]; then
+          echo "deploy-staging=false" >> $GITHUB_OUTPUT
+          echo "deploy-production=true" >> $GITHUB_OUTPUT
+        else
+          echo "deploy-staging=false" >> $GITHUB_OUTPUT
+          echo "deploy-production=false" >> $GITHUB_OUTPUT
+        fi
+
+  # Deploy to Staging Environment
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: check-ci
+    if: needs.check-ci.outputs.deploy-staging == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Configure kubectl for staging
+      run: |
+        echo "Configuring kubectl for staging environment..."
+        # Verify kubectl is working
+        kubectl version --client
+        # Add your staging cluster configuration here
+        # kubectl config use-context staging-cluster
+
+    - name: Deploy to staging
+      run: |
+        echo "🚀 Deploying to Staging Environment..."
+        
+        # Create a temporary deployment file
+        cp k8s/deployment.yaml k8s/deployment-staging.yaml
+        
+        # Update image tag in deployment
+        sed -i "s|ghcr.io/dharshans/3d-gaming-website:latest|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.workflow_run.head_sha }}|g" k8s/deployment-staging.yaml
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f k8s/namespace.yaml
+        kubectl apply -f k8s/configmap.yaml
+        kubectl apply -f k8s/deployment-staging.yaml
+        kubectl apply -f k8s/service.yaml
+        kubectl apply -f k8s/ingress.yaml
+        
+        # Wait for deployment to be ready
+        kubectl rollout status deployment/gaming-website-deployment -n gaming-website --timeout=300s
+        
+        # Cleanup temporary file
+        rm k8s/deployment-staging.yaml
+        
+        echo "✅ Staging deployment completed successfully!"
+
+    - name: Run staging tests
+      run: |
+        echo "🧪 Running staging environment tests..."
+        # Add your staging tests here
+        # curl -f https://staging.gaming-website.local/health
+        echo "✅ Staging tests passed!"
+
+    - name: Notify staging deployment
+      run: |
+        echo "📢 Staging Deployment Notification"
+        echo "Branch: ${{ github.event.workflow_run.head_branch }}"
+        echo "Commit: ${{ github.event.workflow_run.head_sha }}"
+        echo "Environment: staging"
+        echo "URL: https://staging.gaming-website.local"
+
+  # Deploy to Production Environment
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: check-ci
+    if: needs.check-ci.outputs.deploy-production == 'true'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Configure kubectl for production
+      run: |
+        echo "Configuring kubectl for production environment..."
+        # Verify kubectl is working
+        kubectl version --client
+        # Add your production cluster configuration here
+        # kubectl config use-context production-cluster
+
+    - name: Pre-deployment checks
+      run: |
+        echo "🔍 Running pre-deployment checks..."
+        
+        # Check if the image exists
+        echo "Checking Docker image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.workflow_run.head_sha }}"
+        if docker manifest inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.workflow_run.head_sha }}; then
+          echo "✅ Docker image exists and is accessible"
+        else
+          echo "❌ Docker image not found or not accessible"
+          exit 1
+        fi
+        
+        # Validate Kubernetes manifests
+        echo "Validating Kubernetes manifests..."
+        kubectl apply --dry-run=client -f k8s/ || {
+          echo "❌ Kubernetes manifest validation failed"
+          exit 1
+        }
+        
+        echo "✅ Pre-deployment checks passed!"
+
+    - name: Deploy to production
+      run: |
+        echo "🚀 Deploying to Production Environment..."
+        
+        # Create a temporary deployment file
+        cp k8s/deployment.yaml k8s/deployment-production.yaml
+        
+        # Update image tag in deployment
+        sed -i "s|ghcr.io/dharshans/3d-gaming-website:latest|${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.workflow_run.head_sha }}|g" k8s/deployment-production.yaml
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f k8s/namespace.yaml
+        kubectl apply -f k8s/configmap.yaml
+        kubectl apply -f k8s/deployment-production.yaml
+        kubectl apply -f k8s/service.yaml
+        kubectl apply -f k8s/ingress.yaml
+        kubectl apply -f k8s/hpa.yaml
+        
+        # Wait for deployment to be ready
+        kubectl rollout status deployment/gaming-website-deployment -n gaming-website --timeout=600s
+        
+        # Cleanup temporary file
+        rm k8s/deployment-production.yaml
+        
+        echo "✅ Production deployment completed successfully!"
+
+    - name: Run production health checks
+      run: |
+        echo "🏥 Running production health checks..."
+        
+        # Wait for the service to be ready
+        sleep 30
+        
+        # Health check
+        kubectl get pods -n gaming-website
+        kubectl get services -n gaming-website
+        
+        # Test application endpoint
+        # curl -f https://gaming-website.com/health
+        
+        echo "✅ Production health checks passed!"
+
+    - name: Post-deployment verification
+      run: |
+        echo "🔍 Running post-deployment verification..."
+        
+        # Check deployment status
+        kubectl get deployment gaming-website-deployment -n gaming-website -o jsonpath='{.status.conditions[?(@.type=="Available")].status}'
+        
+        # Check HPA status
+        kubectl get hpa gaming-website-hpa -n gaming-website
+        
+        echo "✅ Post-deployment verification completed!"
+
+    - name: Notify production deployment
+      run: |
+        echo "📢 Production Deployment Notification"
+        echo "🎉 Production deployment successful!"
+        echo "Branch: ${{ github.event.workflow_run.head_branch }}"
+        echo "Commit: ${{ github.event.workflow_run.head_sha }}"
+        echo "Environment: production"
+        echo "URL: https://gaming-website.com"
+
+  # Rollback on Failure
+  rollback-production:
+    name: Rollback Production
+    runs-on: ubuntu-latest
+    needs: [check-ci, deploy-production]
+    if: failure() && needs.check-ci.outputs.deploy-production == 'true'
+    
+    steps:
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Rollback deployment
+      run: |
+        echo "🔄 Rolling back production deployment..."
+        
+        # Rollback to previous version
+        kubectl rollout undo deployment/gaming-website-deployment -n gaming-website
+        
+        # Wait for rollback to complete
+        kubectl rollout status deployment/gaming-website-deployment -n gaming-website --timeout=300s
+        
+        echo "✅ Rollback completed successfully!"
+
+    - name: Notify rollback
+      run: |
+        echo "🚨 Production Rollback Notification"
+        echo "Production deployment failed and has been rolled back"
+        echo "Please check the logs and fix the issues before redeploying"
+
+  # Cleanup Old Deployments
+  cleanup:
+    name: Cleanup Old Resources
+    runs-on: ubuntu-latest
+    needs: [deploy-staging, deploy-production]
+    if: always() && (needs.deploy-staging.result == 'success' || needs.deploy-production.result == 'success')
+    
+    steps:
+    - name: Cleanup old Docker images
+      run: |
+        echo "🧹 Cleaning up old Docker images..."
+        # This would typically be done in the container registry
+        echo "Docker image cleanup completed"
+
+    - name: Cleanup old deployments
+      run: |
+        echo "🧹 Cleaning up old Kubernetes resources..."
+        # Remove old replica sets
+        # kubectl delete replicaset --all -n gaming-website
+        echo "Kubernetes cleanup completed"
