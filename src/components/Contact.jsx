@@ -1,11 +1,17 @@
 import AnimatedTitle from "./AnimatedTitle";
 import Button from "./Button";
+import PropTypes from 'prop-types';
 
 const ImageClipBox = ({ src, clipClass }) => (
     <div className={clipClass}>
         <img src={src} />
     </div>
 );
+
+ImageClipBox.propTypes = {
+    src: PropTypes.string.isRequired,
+    clipClass: PropTypes.string.isRequired,
+};
 
 const Contact = () => {
     return (
